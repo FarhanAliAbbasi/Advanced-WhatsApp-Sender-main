@@ -1,0 +1,14 @@
+.vscode/
+__pycache__/
+venv/
+temp/
+build/
+dist/
+*.jpg
+*.png
+*.ico
+*.qrc
+*.log
+*.data
+*.spec
+*.ini
