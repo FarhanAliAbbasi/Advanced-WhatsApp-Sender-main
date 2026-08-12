@@ -21,9 +21,11 @@ from appLog import log
 
 try:
     log.info("browserCTRL start to dl")
+    # Using webdriver-manager as a more robust alternative to chromedriver_autoinstaller if needed
+    # but keeping autoinstaller for now if it works, just adding better error handling.
     chromedriver_autoinstaller.install()
-except:
-    log.exception("")
+except Exception as e:
+    log.error(f"Failed to install chromedriver: {e}")
 CHROME = 1
 FIREFOX = 2
 
@@ -51,12 +53,6 @@ class Web(QThread):
         self.path = path
         self.remember = Remember
         self.isRunning = True
-        try:
-            if not os.path.exists('./temp/cache'):
-                os.makedirs('temp/cache/')
-        except:
-            os.makedirs('./temp/cache/')
-        # Save Session Section
         self.__platform = platform.system().lower()
         if self.__platform != 'windows' and self.__platform != 'linux':
             raise OSError('Only Windows and Linux are supported for now.')
@@ -72,21 +68,37 @@ class Web(QThread):
         elif browser == 2:
             self.set_browser(FIREFOX)
 
+        if not os.path.exists('./temp/profile'):
+            os.makedirs('./temp/profile')
+        self.user_data_path = os.path.abspath('./temp/profile')
+
         self.__init_browser()
 
     def driverBk(self):
         option = webdriver.ChromeOptions()
         option.add_argument("--disable-notifications")
-        # option.add_argument(fr"--user-data-dir={userDataPath}")
+        option.add_argument(f"--user-data-dir={self.user_data_path}")
+        option.add_argument("--no-sandbox")
+        option.add_argument("--disable-dev-shm-usage")
+        option.add_argument("--remote-allow-origins=*")
+        option.add_argument("--disable-gpu")
+        option.add_argument("--disable-software-rasterizer")
+        # Experimental options to make it more like a real browser
+        option.add_experimental_option("excludeSwitches", ["enable-automation"])
+        option.add_experimental_option('useAutomationExtension', False)
+        
         try:
+            self.__driver = webdriver.Chrome(options=option, service=self.service)
+            log.debug("Connected to Chrome with persistent profile")
+        except Exception as e:
+            log.error(f"Failed to start Chrome with persistent profile: {e}")
             try:
-                self.__driver = webdriver.Chrome(options=option, service=self.service)
-                log.debug("webDriver")
-            except:
-                log.exception("error remeber")
+                # Fallback to default if persistent profile is locked
                 self.__driver = webdriver.Chrome(service=self.service)
-        except:
-            log.exception("Chrome ->:")
+                log.debug("Connected to Chrome (fallback)")
+            except Exception as e2:
+                log.error(f"Total failure to start Chrome: {e2}")
+                raise e2
             # if not os.path.exists('temp/F.Options'):
             #     os.mkdir('temp/F.Options')
             # optionsF = webdriver.FirefoxOptions()
@@ -183,19 +195,9 @@ class Web(QThread):
     def ANALYZ(self):
         try:
             log.debug("analyz")
-            if self.remember:
-                log.debug("remember")
-                cacheList = os.listdir('temp/cache/')
-                if len(cacheList) != 0:
-                    self.access_by_file(f"./temp/cache/{cacheList[0]}")
-                    log.debug('recover')
-                else:
-                    self.driverBk()
-                    self.__driver.get(self.__URL)
-            else:
-                log.debug("! remember !")
-                self.driverBk()
-                self.__driver.get(self.__URL)
+            # Session persistence is now handled by driverBk using --user-data-dir
+            self.driverBk()
+            self.__driver.get(self.__URL)
 
             while True:
                 log.debug("Login Check")
@@ -257,23 +259,15 @@ class Web(QThread):
             log.debug("end")
             self.EndWork.emit("-- analysis completed --")
             self.isRunning = False
-            self.__driver.quit()
+            # Removed self.__driver.quit() to keep the browser open as requested
         except:
             log.exception("Analyz ->:")
 
     def SendTEXT(self):
         log.debug("sent text")
-        if self.remember:
-            cacheList = os.listdir('temp/cache/')
-            if len(cacheList) != 0:
-                self.access_by_file(f"./temp/cache/{cacheList[0]}")
-                log.debug('recover')
-            else:
-                self.driverBk()
-                self.__driver.get(self.__URL)
-        else:
-            self.driverBk()
-            self.__driver.get(self.__URL)
+        # Session persistence is now handled by driverBk using --user-data-dir
+        self.driverBk()
+        self.__driver.get(self.__URL)
         time.sleep(2)
         while True:
             time.sleep(1)
@@ -309,11 +303,46 @@ class Web(QThread):
                     element = self.__driver.find_element(By.XPATH, '/html/head/a')
                     self.__driver.execute_script(
                         f"arguments[0].setAttribute('href','https://wa.me/{num}');", element)
+                # Get the previous chat header before navigating
+                try:
+                    prev_header = self.__driver.find_element(By.XPATH, '//div[@id="main"]//header').text
+                except:
+                    prev_header = None
+
                 user = self.__driver.find_element(By.XPATH, '/html/head/a')
                 self.__driver.execute_script("arguments[0].click();", user)
-                time.sleep(2)
-                sourceWeb = self.__driver.page_source
-                if "Phone number shared via url is invalid" in sourceWeb:
+                
+                # Wait for the chat to load or to show "invalid number" modal
+                is_invalid = False
+                for _ in range(20):  # Wait up to 10 seconds
+                    sourceWeb = self.__driver.page_source
+                    if "Phone number shared via url is invalid" in sourceWeb or "invalid" in sourceWeb.lower() and "phone" in sourceWeb.lower():
+                        is_invalid = True
+                        break
+                    try:
+                        ok_btn = self.__driver.find_elements(By.XPATH, '//div[@role="button"]//span[text()="OK"]')
+                        if ok_btn:
+                            is_invalid = True
+                            self.__driver.execute_script("arguments[0].click();", ok_btn[0])
+                            break
+                    except:
+                        pass
+                    
+                    # If header changed, it means the chat has loaded
+                    try:
+                        current_header = self.__driver.find_element(By.XPATH, '//div[@id="main"]//header').text
+                        if current_header != prev_header:
+                            break
+                    except:
+                        if prev_header is None:
+                            try:
+                                self.__driver.find_element(By.XPATH, '//div[@id="main"]//header')
+                                break
+                            except:
+                                pass
+                    time.sleep(0.5)
+
+                if is_invalid:
                     log.debug(f"Not Found {num}")
                     nf += 1
                     self.lcdNumber_nwa.emit(nf)
@@ -325,8 +354,12 @@ class Web(QThread):
 
                     textBox = self.find_message_input()
                     time.sleep(1)
-                    self.copyToClipboard(self.text)
+                    
+                    # Use pyperclip to support emojis and complex formatting
+                    import pyperclip
+                    pyperclip.copy(self.text)
                     textBox.send_keys(Keys.CONTROL, 'v')
+                    
                     time.sleep(1)
                     try:
                         textBox.send_keys(Keys.RETURN)
@@ -346,23 +379,14 @@ class Web(QThread):
                 self.lcdNumber_reviewed.emit(i)
                 self.LogBox.emit(logtxt)
         log.debug("end msg")
-        self.EndWork.emit("-- Send Message completed --")
-        self.stop()
         self.isRunning = False
+        # Removed self.stop() to keep browser open
 
     def SendIMG(self):
         log.debug("sent img")
-        if self.remember:
-            cacheList = os.listdir('temp/cache/')
-            if len(cacheList) != 0:
-                self.access_by_file(f"./temp/cache/{cacheList[0]}")
-                log.debug('recover')
-            else:
-                self.driverBk()
-                self.__driver.get(self.__URL)
-        else:
-            self.driverBk()
-            self.__driver.get(self.__URL)
+        # Session persistence is now handled by driverBk using --user-data-dir
+        self.driverBk()
+        self.__driver.get(self.__URL)
         time.sleep(2)
         while True:
             time.sleep(1)
@@ -397,11 +421,46 @@ class Web(QThread):
                 else:
                     element = self.__driver.find_element(By.XPATH, '/html/head/a')
                     self.__driver.execute_script(f"arguments[0].setAttribute('href','https://wa.me/{num}');", element)
+                # Get the previous chat header before navigating
+                try:
+                    prev_header = self.__driver.find_element(By.XPATH, '//div[@id="main"]//header').text
+                except:
+                    prev_header = None
+
                 user = self.__driver.find_element(By.XPATH, '/html/head/a')
                 self.__driver.execute_script("arguments[0].click();", user)
-                time.sleep(2)
-                sourceWeb = self.__driver.page_source
-                if "Phone number shared via url is invalid" in sourceWeb:
+                
+                # Wait for the chat to load or to show "invalid number" modal
+                is_invalid = False
+                for _ in range(20):  # Wait up to 10 seconds
+                    sourceWeb = self.__driver.page_source
+                    if "Phone number shared via url is invalid" in sourceWeb or "invalid" in sourceWeb.lower() and "phone" in sourceWeb.lower():
+                        is_invalid = True
+                        break
+                    try:
+                        ok_btn = self.__driver.find_elements(By.XPATH, '//div[@role="button"]//span[text()="OK"]')
+                        if ok_btn:
+                            is_invalid = True
+                            self.__driver.execute_script("arguments[0].click();", ok_btn[0])
+                            break
+                    except:
+                        pass
+                    
+                    # If header changed, it means the chat has loaded
+                    try:
+                        current_header = self.__driver.find_element(By.XPATH, '//div[@id="main"]//header').text
+                        if current_header != prev_header:
+                            break
+                    except:
+                        if prev_header is None:
+                            try:
+                                self.__driver.find_element(By.XPATH, '//div[@id="main"]//header')
+                                break
+                            except:
+                                pass
+                    time.sleep(0.5)
+
+                if is_invalid:
                     log.debug(f"Not Found {num}")
                     nf += 1
                     self.lcdNumber_nwa.emit(nf)
@@ -418,8 +477,9 @@ class Web(QThread):
                     time.sleep(2)
                     caption = self.__driver.find_element(
                         By.XPATH, '//div[@role="textbox"]')
-                    if self.text != '' or self.text != ' ':
-                        self.copyToClipboard(self.text)
+                    if self.text != '' and self.text != ' ':
+                        import pyperclip
+                        pyperclip.copy(self.text)
                         caption.send_keys(Keys.CONTROL, 'v')
                         time.sleep(1)
                     try:
@@ -439,9 +499,8 @@ class Web(QThread):
                 i += 1
                 self.lcdNumber_reviewed.emit(i)
                 self.LogBox.emit(logtxt)
-        self.EndWork.emit("-- Send Image completed --")
-        self.stop()
         self.isRunning = False
+        # Removed self.stop() to keep browser open
 
     def addAcc(self):
         try:
@@ -473,10 +532,7 @@ class Web(QThread):
     def stop(self):
         self.isRunning = False
         log.debug('stopping thread...')
-        try:
-            self.__driver.quit()
-        except:
-            pass
+        # Removed self.__driver.quit() to keep browser open
         # self.terminate()
 
     def __init_browser(self):

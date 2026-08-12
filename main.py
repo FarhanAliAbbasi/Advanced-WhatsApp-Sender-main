@@ -18,19 +18,21 @@ import icons_rc
 from browserCtrl import Web
 from src import dpi
 from appLog import log
+from mapsExtractor import MapsWeb
+
+TableNow = None
 
 
-class Main():
+class Main(object):
 
     def __init__(self):
-        super(Main, self).__init__()
-        app = QApplication(sys.argv)
         self.__LICENS__ = True
         self.__VERSION__ = '1.0'
+        self.imported_file_path = None
         self.cv = 0
         self.Net = None
         self.User = True
-        log.info(fr"===== Program Runing {self.__VERSION__} =====")
+        log.info(fr"===== Program Running {self.__VERSION__} =====")
         self.insert = NetWork(version=self.__VERSION__)
         self.insert.start()
         # self.insert.Checker.connect(self.qthreadInsert)
@@ -89,8 +91,10 @@ class Main():
         self.ui.langs.currentIndexChanged.connect(self.languageSet)
         self.languageSet()
 
+        # Init Google Maps Tab
+        self.initMapsTab()
+
         self.MainWindow.show()
-        sys.exit(app.exec_())
 
     def languageConf(self):
         self.ui.langs.clear()
@@ -291,27 +295,34 @@ class Main():
             NUMBERS = []
             type = path.split('.')[-1]
             if type == 'csv':
-                with open(path, 'r+') as csvF:
-                    numbers = csv.reader(csvF)
-                    for number in numbers:
-                        for num in number:
+                # Try to detect delimiter
+                import csv
+                with open(path, 'r', encoding='utf-8') as f:
+                    content = f.read(2048)
+                    dialect = csv.Sniffer().sniff(content) if content else None
+                    f.seek(0)
+                    if dialect:
+                        numbers = csv.reader(f, dialect)
+                    else:
+                        numbers = csv.reader(f, delimiter=';') # Fallback to semicolon as used in our export
+                    
+                    for row in numbers:
+                        for cell in row:
                             try:
-                                self.areaCode = int(self.ui.areaCode.text())
-                            except:
-                                pass
-                            try:
-                                n = int(num)
-                                if len(str(num)) >= 9:
-                                    s98 = re.compile(fr"^{self.areaCode}", re.I)
-                                    s0 = re.compile('^0', re.I)
-                                    if s98.search(num):
-                                        pass
-                                    elif s0.search(num):
-                                        num = re.sub('^0', fr"{self.areaCode}", num)
-                                    else:
-                                        num = fr"{self.areaCode}{num}"
-                                    n = int(num)
-                                    NUMBERS.append(n)
+                                self.areaCode = str(self.ui.areaCode.text()).strip()
+                                # Clean the string: keep only digits
+                                clean_num = "".join(filter(str.isdigit, str(cell)))
+                                if not clean_num:
+                                    continue
+                                
+                                # Handle leading zero or missing area code
+                                if len(clean_num) >= 9:
+                                    if clean_num.startswith('0'):
+                                        clean_num = self.areaCode + clean_num[1:]
+                                    elif not clean_num.startswith(self.areaCode):
+                                        clean_num = self.areaCode + clean_num
+                                    
+                                    NUMBERS.append(int(clean_num))
                             except:
                                 continue
             elif type == 'xlsx' or type == 'xls':
@@ -474,12 +485,57 @@ class Main():
         else:
             log.debug("wa Db Not Open")
 
+    def remove_number_from_csv(self, file_path, number_to_remove):
+        if not file_path or not os.path.exists(file_path):
+            return
+            
+        clean_target = "".join(filter(str.isdigit, str(number_to_remove)))
+        if not clean_target:
+            return
+            
+        temp_file = file_path + ".tmp"
+        try:
+            delimiter = ';'
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read(2048)
+                f.seek(0)
+                try:
+                    dialect = csv.Sniffer().sniff(content) if content else None
+                    if dialect:
+                        delimiter = dialect.delimiter
+                except:
+                    pass
+            
+            rows = []
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as infile:
+                reader = csv.reader(infile, delimiter=delimiter)
+                for row in reader:
+                    should_remove = False
+                    for cell in row:
+                        clean_cell = "".join(filter(str.isdigit, str(cell)))
+                        if clean_cell == clean_target or (len(clean_cell) >= 9 and clean_cell[-9:] == clean_target[-9:]):
+                            should_remove = True
+                            break
+                    if not should_remove:
+                        rows.append(row)
+                        
+            with open(file_path, 'w', encoding='utf-8', newline='') as outfile:
+                writer = csv.writer(outfile, delimiter=delimiter, quotechar='"', quoting=csv.QUOTE_MINIMAL)
+                writer.writerows(rows)
+                
+            log.debug(f"Removed {number_to_remove} from CSV file {file_path}")
+        except Exception as e:
+            log.error(f"Error removing number from CSV: {e}")
+
     def nwaINS(self, number):
         log.debug(number)
         if db.open():
             query = QSqlQuery()
             if self.ui.start_tab.currentIndex() == 0:
-                query.exec_(fr"update `{TableNow}` set status = '✓', res = '☒' where num = '{number}'")
+                query.exec_(fr"delete from `{TableNow}` where num = '{number}'")
+                if hasattr(self, 'imported_file_path') and self.imported_file_path:
+                    if self.imported_file_path.lower().endswith('.csv'):
+                        self.remove_number_from_csv(self.imported_file_path, number)
             elif self.ui.start_tab.currentIndex() == 1:
                 query.exec_(fr"update `{TableNow}` set status = '✓✓', res = '☒' where num = '{number}'")
             elif self.ui.start_tab.currentIndex() == 2:
@@ -845,6 +901,7 @@ class Main():
         try:
             if num_path:
                 self.formQImport1.close()
+                self.imported_file_path = num_path
         except:
             pass
         self.ListLoader(num_path)
@@ -952,6 +1009,131 @@ class Main():
         except requests.ConnectionError:
             log.debug("No internet connection available.", exc_info=True)
             return False
+
+    def initMapsTab(self):
+        from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QPlainTextEdit, QLabel
+        self.tab_maps = QWidget()
+        self.layout_maps = QVBoxLayout(self.tab_maps)
+        
+        self.maps_query = QLineEdit()
+        self.maps_query.setPlaceholderText("Search on Google Maps (e.g. Restaurants in Lahore)")
+        self.maps_query.setStyleSheet("background-color: white; color: black; padding: 5px; border-radius: 5px;")
+        
+        self.layout_btns = QHBoxLayout()
+        style = "QPushButton { background-color: #10ffc4; color: black; border-radius: 10px; padding: 8px; font-weight: bold; } " \
+                "QPushButton:hover { background-color: #817dff; color: white; }"
+        
+        self.btn_maps_start = QPushButton("Start Extraction")
+        self.btn_maps_stop = QPushButton("Stop")
+        self.btn_maps_stop.setEnabled(False)
+        
+        self.btn_maps_save = QPushButton("Download CSV")
+        self.btn_maps_save.setEnabled(False)
+        self.btn_maps_save.setStyleSheet(style.replace("#10ffc4", "#ffb700"))
+        
+        self.btn_maps_start.setStyleSheet(style)
+        self.btn_maps_stop.setStyleSheet(style.replace("#10ffc4", "#ff4c4c"))
+        
+        self.layout_btns.addWidget(self.btn_maps_start)
+        self.layout_btns.addWidget(self.btn_maps_stop)
+        self.layout_btns.addWidget(self.btn_maps_save)
+        
+        self.maps_log = QPlainTextEdit()
+        self.maps_log.setReadOnly(True)
+        self.maps_log.setStyleSheet("background-color: black; color: #2eff00; font-family: Consolas;")
+        
+        self.layout_maps.addWidget(QLabel("Google Maps Business Extractor"))
+        self.layout_maps.addWidget(self.maps_query)
+        self.layout_maps.addLayout(self.layout_btns)
+        self.layout_maps.addWidget(self.maps_log)
+        
+        self.ui.start_tab.addTab(self.tab_maps, "Maps Extractor")
+        
+        self.btn_maps_start.clicked.connect(self.startMapsExtraction)
+        self.btn_maps_stop.clicked.connect(self.stopMapsExtraction)
+        self.btn_maps_save.clicked.connect(self.saveMapsCsv)
+        self.all_leads = []
+
+    def startMapsExtraction(self):
+        query = self.maps_query.text()
+        if not query:
+            self.msgError("Please enter a search query!")
+            return
+            
+        self.maps_log.clear()
+        self.maps_log.appendPlainText(f"--- Starting extraction for: {query} ---")
+        
+        self.mapsThread = MapsWeb(query)
+        self.mapsThread.progress.connect(lambda msg: self.maps_log.appendPlainText(msg))
+        self.mapsThread.lead_found.connect(self.handleMapLead)
+        self.mapsThread.finished.connect(self.mapsFinished)
+        
+        self.btn_maps_start.setEnabled(False)
+        self.btn_maps_stop.setEnabled(True)
+        self.btn_maps_save.setEnabled(False)
+        self.all_leads = []
+        self.mapsThread.start()
+
+    def handleMapLead(self, lead):
+        global TableNow
+        name = lead['name']
+        phone = lead['phone']
+        self.maps_log.appendPlainText(f"EXTRACTED: {name} -> {phone}")
+        self.all_leads.append(lead)
+        self.btn_maps_save.setEnabled(True)
+        
+        # Auto-import logic
+        try:
+            # If no table is active, create one
+            if not TableNow:
+                TableNow = self.Time()
+                with sqlite3.connect(self.dbPath) as dbi:
+                    table_cmd = f"CREATE TABLE IF NOT EXISTS `{TableNow}` (num INT PRIMARY KEY NOT NULL, status VARCHAR(50), res VARCHAR(12))"
+                    dbi.execute(table_cmd)
+                    dbi.commit()
+
+            with sqlite3.connect(self.dbPath) as dbi:
+                # Clean phone number (keep only digits)
+                clean_num = "".join(filter(str.isdigit, phone))
+                if clean_num:
+                    insert = f"INSERT OR IGNORE INTO `{TableNow}` (num,status) VALUES ('{clean_num}','')"
+                    dbi.execute(insert)
+                    dbi.commit()
+            
+            self.showNumberList(commandSQL=f"select * from `{TableNow}`")
+        except Exception as e:
+            log.error(f"Auto-save error: {e}")
+            pass
+
+    def saveMapsCsv(self):
+        if not self.all_leads:
+            return
+            
+        options = QFileDialog.Options()
+        fileName, _ = QFileDialog.getSaveFileName(self.MainWindow, "Save Leads", "", "CSV Files (*.csv)", options=options)
+        if fileName:
+            if not fileName.endswith('.csv'):
+                fileName += '.csv'
+            try:
+                import csv
+                with open(fileName, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f, delimiter=';')
+                    writer.writerow(['Name', 'Phone'])
+                    for lead in self.all_leads:
+                        writer.writerow([lead['name'], lead['phone']])
+                self.msgError(f"Saved {len(self.all_leads)} leads to {fileName}", icon="Information", colorf="#214917")
+            except Exception as e:
+                self.msgError(f"Error saving file: {e}")
+
+    def stopMapsExtraction(self):
+        if hasattr(self, 'mapsThread'):
+            self.mapsThread.stop()
+            self.btn_maps_stop.setEnabled(False)
+
+    def mapsFinished(self, msg):
+        self.maps_log.appendPlainText(msg)
+        self.btn_maps_start.setEnabled(True)
+        self.btn_maps_stop.setEnabled(False)
 
 
 class myQMainWindow(QMainWindow):
@@ -1083,12 +1265,8 @@ class TableModel(QAbstractTableModel):
 
 
 if __name__ == '__main__':
+    import os
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    app = QApplication(sys.argv)
     run = Main()
-    # from multiprocessing import Process
-    # p1 = Process(target=Main)
-    # srv = NetWork()
-    # p2 =Process(target=srv.insertMember,args=('1.0',))
-    # p1.start()
-    # p2.start()
-    # p1.join()
-    # p2.join()
+    sys.exit(app.exec_())
