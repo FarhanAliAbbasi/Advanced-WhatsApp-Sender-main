@@ -1,15 +1,50 @@
-.vscode/
+# Byte-compiled / optimized / DLL files
 __pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Virtual Environments
+.venv/
 venv/
-temp/
+ENV/
+env/
+
+# Editor / IDE settings
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# PyInstaller / Build outputs
 build/
 dist/
-*.jpg
-*.png
-*.ico
-*.qrc
-*.log
-*.data
 *.spec
-*.ini
-solar pindi.csv
+
+# Log files and reports
+*.log
+logs/
+
+# SQLite databases and session cache
+*.data
+*.db
+*.sqlite
+temp/
+
+# User data files (Excel/CSV lists)
+*.csv
+*.xlsx
+*.xls
+*.ods
+
+# Media and assets (excluding necessary package icons/fonts if any)
+# Note: Keep fonts/ and src/ since they are part of the application source code.
