@@ -586,10 +586,58 @@ class Main(object):
                 errormsg = e
             self.msgError(fr"{errormsg}")
 
+    def is_invalid_or_landline(self, num_str):
+        # Clean the number
+        clean_num = str(num_str).strip().replace(" ", "").replace("-", "").replace("+", "")
+        
+        if not clean_num:
+            return True
+            
+        # Length check: WhatsApp numbers must have a reasonable length (usually >= 9 digits)
+        if len(clean_num) < 9:
+            return True
+            
+        # Pakistan landline checks:
+        if clean_num.startswith("92"):
+            if not clean_num.startswith("923"):
+                return True  # Starts with 92 but not 923 -> Landline
+        elif clean_num.startswith("0"):
+            if not clean_num.startswith("03"):
+                return True  # Starts with 0 but not 03 -> Landline
+        else:
+            # Raw number without country/local prefix
+            if not clean_num.startswith("3"):
+                return True
+                
+        return False
+
     def AnalyzNum(self):
         try:
             if db.open():
-                # QApplication.processEvents()
+                # 1. Pre-filter landline/invalid numbers
+                query = QSqlQuery()
+                query.exec_(fr"select * from `{TableNow}` where status = ''")
+                invalid_numbers = []
+                while query.next():
+                    num = query.value(0)
+                    if self.is_invalid_or_landline(num):
+                        invalid_numbers.append(num)
+                        
+                if invalid_numbers:
+                    log.debug(f"Pre-filtering invalid/landline numbers: {invalid_numbers}")
+                    self.ui.LogBox.appendPlainText(f"Found {len(invalid_numbers)} landline/PTCL number(s). Removing from list...")
+                    for num in invalid_numbers:
+                        del_query = QSqlQuery()
+                        del_query.exec_(fr"delete from `{TableNow}` where num = '{num}'")
+                        if hasattr(self, 'imported_file_path') and self.imported_file_path:
+                            if self.imported_file_path.lower().endswith('.csv'):
+                                self.remove_number_from_csv(self.imported_file_path, num)
+                    # Refresh the numbers view list
+                    self.showNumberList(commandSQL=fr"select * from `{TableNow}`")
+                    self.ui.LogBox.appendPlainText("Landline/PTCL numbers removed successfully.")
+                    QApplication.processEvents()
+
+                # 2. Get the remaining clean list for browser validation
                 log.debug("Analyz OK")
                 query = QSqlQuery()
                 query.exec_(fr"select * from `{TableNow}` where status = ''")
@@ -852,7 +900,7 @@ class Main(object):
         if firstNumber != '':
             if not len(firstNumber) < 9:
                 path = fr"temp\generate-{self.Time()}.csv"
-                log.debug(firstNumber, path)
+                log.debug(f"{firstNumber} {path}")
                 for i in range(int(RangeNum)):
                     with open(fr"{path}", 'a+') as g:
                         writer = csv.writer(g, delimiter=';', quotechar='"', quoting=csv.QUOTE_ALL,
@@ -1196,11 +1244,14 @@ class ColorfullSqlQueryModel(QSqlQueryModel):
             self.green = green
 
     def data(self, index, role):
+        if not index.isValid():
+            return QSqlQueryModel.data(self, index, role)
         row = index.row()
-        if role == Qt.BackgroundRole and row in self.red:
-            return QBrush(QColor('#FC500B'))
-        if role == Qt.BackgroundRole and row in self.green:
-            return QBrush(QColor('#AEF77E'))
+        if role == Qt.BackgroundRole:
+            if hasattr(self, 'red') and row in self.red:
+                return QBrush(QColor('#FC500B'))
+            if hasattr(self, 'green') and row in self.green:
+                return QBrush(QColor('#AEF77E'))
         return QSqlQueryModel.data(self, index, role)
 
 

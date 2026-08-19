@@ -207,7 +207,7 @@ class Web(QThread):
                     logtxt = "Login Success"
                     self.LogBox.emit(logtxt)
                     break
-            log.debug("thread:", self.counter_start)
+            log.debug(f"thread: {self.counter_start}")
             i = 0
             f = 0
             nf = 0
@@ -233,16 +233,45 @@ class Web(QThread):
                                                      element)
                     user = self.__driver.find_element(By.XPATH, '/html/head/a')
                     self.__driver.execute_script("arguments[0].click();", user)
-                    time.sleep(2)
-                    sourceWeb = self.__driver.page_source
-                    if "Phone number shared via url is invalid" in sourceWeb:
+                    # Wait for either the chat to load, or the invalid number popup
+                    is_invalid = False
+                    for _ in range(10):  # Wait up to 5 seconds
+                        sourceWeb = self.__driver.page_source
+                        if "Phone number shared via url is invalid" in sourceWeb or "isn't on WhatsApp" in sourceWeb or "is not on WhatsApp" in sourceWeb:
+                            is_invalid = True
+                            for xpath in [
+                                '//div[@role="button"]//div[text()="OK"]',
+                                '//div[@role="button"]//span[text()="OK"]',
+                                '//button//span[text()="OK"]',
+                                '//button[text()="OK"]',
+                                '//div[text()="OK"]',
+                                '//*[text()="OK"]'
+                            ]:
+                                try:
+                                    ok_btns = self.__driver.find_elements(By.XPATH, xpath)
+                                    for btn in ok_btns:
+                                        if btn.is_displayed():
+                                            self.__driver.execute_script("arguments[0].click();", btn)
+                                            break
+                                except:
+                                    pass
+                            time.sleep(1)
+                            break
+                        try:
+                            self.__driver.find_element(By.XPATH, '//div[@id="main"]//header')
+                            break
+                        except:
+                            pass
+                        time.sleep(0.5)
+
+                    if is_invalid:
                         log.debug(f"Not Found {num}")
                         nf += 1
                         self.lcdNumber_nwa.emit(nf)
                         logtxt = f"Number::{num} => Not Find!"
                         self.nwa.emit(f"{num}")
                     else:
-                        log.debug("find", num)
+                        log.debug(f"find {num}")
                         f += 1
                         self.lcdNumber_wa.emit(f)
                         logtxt = f"Number::{num} => Find."
@@ -316,17 +345,26 @@ class Web(QThread):
                 is_invalid = False
                 for _ in range(20):  # Wait up to 10 seconds
                     sourceWeb = self.__driver.page_source
-                    if "Phone number shared via url is invalid" in sourceWeb or "invalid" in sourceWeb.lower() and "phone" in sourceWeb.lower():
+                    if "Phone number shared via url is invalid" in sourceWeb or "isn't on WhatsApp" in sourceWeb or "is not on WhatsApp" in sourceWeb:
                         is_invalid = True
+                        for xpath in [
+                            '//div[@role="button"]//div[text()="OK"]',
+                            '//div[@role="button"]//span[text()="OK"]',
+                            '//button//span[text()="OK"]',
+                            '//button[text()="OK"]',
+                            '//div[text()="OK"]',
+                            '//*[text()="OK"]'
+                        ]:
+                            try:
+                                ok_btns = self.__driver.find_elements(By.XPATH, xpath)
+                                for btn in ok_btns:
+                                    if btn.is_displayed():
+                                        self.__driver.execute_script("arguments[0].click();", btn)
+                                        break
+                            except:
+                                pass
+                        time.sleep(1)
                         break
-                    try:
-                        ok_btn = self.__driver.find_elements(By.XPATH, '//div[@role="button"]//span[text()="OK"]')
-                        if ok_btn:
-                            is_invalid = True
-                            self.__driver.execute_script("arguments[0].click();", ok_btn[0])
-                            break
-                    except:
-                        pass
                     
                     # If header changed, it means the chat has loaded
                     try:
@@ -434,17 +472,26 @@ class Web(QThread):
                 is_invalid = False
                 for _ in range(20):  # Wait up to 10 seconds
                     sourceWeb = self.__driver.page_source
-                    if "Phone number shared via url is invalid" in sourceWeb or "invalid" in sourceWeb.lower() and "phone" in sourceWeb.lower():
+                    if "Phone number shared via url is invalid" in sourceWeb or "isn't on WhatsApp" in sourceWeb or "is not on WhatsApp" in sourceWeb:
                         is_invalid = True
+                        for xpath in [
+                            '//div[@role="button"]//div[text()="OK"]',
+                            '//div[@role="button"]//span[text()="OK"]',
+                            '//button//span[text()="OK"]',
+                            '//button[text()="OK"]',
+                            '//div[text()="OK"]',
+                            '//*[text()="OK"]'
+                        ]:
+                            try:
+                                ok_btns = self.__driver.find_elements(By.XPATH, xpath)
+                                for btn in ok_btns:
+                                    if btn.is_displayed():
+                                        self.__driver.execute_script("arguments[0].click();", btn)
+                                        break
+                            except:
+                                pass
+                        time.sleep(1)
                         break
-                    try:
-                        ok_btn = self.__driver.find_elements(By.XPATH, '//div[@role="button"]//span[text()="OK"]')
-                        if ok_btn:
-                            is_invalid = True
-                            self.__driver.execute_script("arguments[0].click();", ok_btn[0])
-                            break
-                    except:
-                        pass
                     
                     # If header changed, it means the chat has loaded
                     try:
@@ -467,7 +514,7 @@ class Web(QThread):
                     logtxt = f"Number::{num} => No Send"
                     self.nwa.emit(f"{num}")
                 else:
-                    log.debug("find", num)
+                    log.debug(f"find {num}")
                     time.sleep(2)
                     self.__driver.find_element(By.XPATH, '//span[@data-icon="plus-rounded"]').click()
                     time.sleep(2)
@@ -512,7 +559,7 @@ class Web(QThread):
                 self.save_profile(self.get_active_session(),
                                   f"./temp/cache/{self.path}")
                 log.debug('File saved.')
-            log.debug("thread:", self.counter_start)
+            log.debug(f"thread: {self.counter_start}")
             self.EndWork.emit("-- Add Account completed --")
             self.isRunning = False
         except:
